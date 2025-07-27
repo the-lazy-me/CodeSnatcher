@@ -1,7 +1,7 @@
 name: Build and Push Docker Image
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:  # 手动触发
 
 jobs:
   build-and-push:
@@ -11,7 +11,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. 设置 Node.js 环境（可选：用于构建前检查）
+      # 2. 设置 Node.js 环境（可选）
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -31,4 +31,4 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ secrets.IMAGE_NAME }}:latest
+          tags: thelazy/codesnatcher:latest
