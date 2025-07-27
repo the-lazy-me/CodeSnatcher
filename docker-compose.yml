@@ -1,0 +1,11 @@
+version: '3'
+
+services:
+  autoemail:
+    build: .
+    ports:
+      - "3000:3000"  # API端口
+      - "3001:3001"  # WebSocket端口
+    restart: unless-stopped
+    volumes:
+      - ./.env:/app/.env:ro  # 使用.env文件配置 
