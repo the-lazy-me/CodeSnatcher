@@ -7,6 +7,7 @@ class WebSocketService {
     this.wss = null;
     this.clients = new Map(); // 客户端连接映射表
     this.pendingRequests = new Map(); // 等待验证码的请求
+    this.authenticatedClients = new Set(); // 已认证的客户端
   }
 
   /**
@@ -40,6 +41,16 @@ class WebSocketService {
       ws.on('message', (message) => {
         try {
           const data = JSON.parse(message);
+          
+          // 检查认证状态
+          if (data.type !== 'authenticate' && config.api.authEnabled && !this.authenticatedClients.has(clientId)) {
+            this.sendToClient(ws, {
+              type: 'error',
+              message: '未认证，请先进行认证'
+            });
+            return;
+          }
+          
           this.handleMessage(clientId, ws, data);
         } catch (error) {
           console.error('解析消息失败:', error);
@@ -60,6 +71,23 @@ class WebSocketService {
       ws.on('error', (error) => {
         console.error(`客户端 ${clientId} 发生错误:`, error);
       });
+      
+      // 设置认证超时
+      if (config.api.authEnabled) {
+        const authTimeout = setTimeout(() => {
+          if (!this.authenticatedClients.has(clientId) && this.clients.has(clientId)) {
+            console.log(`客户端 ${clientId} 认证超时，关闭连接`);
+            this.sendToClient(ws, {
+              type: 'error',
+              message: '认证超时'
+            });
+            ws.close();
+          }
+        }, 30000); // 30秒认证超时
+        
+        // 存储超时ID以便在认证成功后清除
+        ws.authTimeout = authTimeout;
+      }
     });
   }
 
@@ -81,6 +109,10 @@ class WebSocketService {
     const { type, payload } = data;
     
     switch (type) {
+      case 'authenticate':
+        this.handleAuthentication(clientId, ws, payload);
+        break;
+        
       case 'wait_for_code':
         this.handleWaitForCode(clientId, ws, payload);
         break;
@@ -100,6 +132,51 @@ class WebSocketService {
           message: '未知的消息类型'
         });
     }
+  }
+
+  /**
+   * 处理客户端认证
+   * @param {string} clientId 客户端ID
+   * @param {WebSocket} ws WebSocket连接
+   * @param {Object} payload 认证数据
+   */
+  handleAuthentication(clientId, ws, payload) {
+    const { token } = payload;
+    
+    if (!token) {
+      this.sendToClient(ws, {
+        type: 'auth_error',
+        message: '缺少认证令牌'
+      });
+      return;
+    }
+    
+    // 验证令牌
+    if (config.api.authEnabled) {
+      if (token !== config.api.wsToken) {
+        console.warn(`客户端 ${clientId} 认证失败: 无效的令牌`);
+        this.sendToClient(ws, {
+          type: 'auth_error',
+          message: '无效的认证令牌'
+        });
+        return;
+      }
+    }
+    
+    // 认证成功
+    this.authenticatedClients.add(clientId);
+    console.log(`客户端 ${clientId} 认证成功`);
+    
+    // 清除认证超时
+    if (ws.authTimeout) {
+      clearTimeout(ws.authTimeout);
+      delete ws.authTimeout;
+    }
+    
+    this.sendToClient(ws, {
+      type: 'auth_success',
+      message: '认证成功'
+    });
   }
 
   /**
@@ -227,6 +304,9 @@ class WebSocketService {
   handleClientDisconnect(clientId) {
     // 清理请求资源
     this.cleanupRequest(clientId);
+    
+    // 移除认证状态
+    this.authenticatedClients.delete(clientId);
     
     // 移除客户端记录
     this.clients.delete(clientId);
