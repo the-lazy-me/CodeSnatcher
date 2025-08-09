@@ -10,6 +10,7 @@
 - 提供 HTTP API 接口支持长轮询
 - 支持多客户端同时监听不同邮箱
 - 自动重连和错误处理
+- 支持 API 和 WebSocket 鉴权认证
 - 简单的客户端示例
 
 ## 安装
@@ -42,6 +43,11 @@ EMAIL_TLS=true
 # 服务器配置
 PORT=3000
 WS_PORT=3001
+
+# 认证配置
+AUTH_ENABLED=true
+API_TOKEN=your_api_token_here
+WS_TOKEN=your_websocket_token_here
 ```
 
 ## 使用方法
@@ -61,6 +67,37 @@ npm run dev
 ### WebSocket 客户端
 
 使用 WebSocket 客户端连接到 `ws://localhost:3001`（或者您配置的端口）。
+
+#### 认证
+
+如果启用了认证（AUTH_ENABLED=true），连接后需要先发送认证消息：
+
+```json
+{
+  "type": "authenticate",
+  "payload": {
+    "token": "your_websocket_token_here"
+  }
+}
+```
+
+认证成功后会收到响应：
+
+```json
+{
+  "type": "auth_success",
+  "message": "认证成功"
+}
+```
+
+认证失败则会收到：
+
+```json
+{
+  "type": "auth_error",
+  "message": "无效的认证令牌"
+}
+```
 
 #### 消息格式
 
@@ -149,6 +186,16 @@ npm run dev
 
 ### HTTP API
 
+#### 认证
+
+如果启用了认证（AUTH_ENABLED=true），所有 API 请求需要在 Header 中添加认证令牌：
+
+```
+Authorization: Bearer your_api_token_here
+```
+
+#### 接口列表
+
 1. 健康检查：
 
 ```
@@ -195,12 +242,11 @@ const ws = new WebSocket('ws://your-server:3001');
 ws.onopen = () => {
   console.log('连接已建立');
   
-  // 发送等待验证码请求
+  // 发送认证请求（如果启用了认证）
   ws.send(JSON.stringify({
-    type: 'wait_for_code',
+    type: 'authenticate',
     payload: {
-      email: 'target@example.com', // 要监听的邮箱地址
-      timeout: 300000 // 5分钟超时
+      token: 'your_websocket_token_here'
     }
   }));
 };
@@ -209,7 +255,20 @@ ws.onopen = () => {
 ws.onmessage = (event) => {
   const data = JSON.parse(event.data);
   
-  if (data.type === 'code_received') {
+  if (data.type === 'auth_success') {
+    // 认证成功，发送等待验证码请求
+    ws.send(JSON.stringify({
+      type: 'wait_for_code',
+      payload: {
+        email: 'target@example.com', // 要监听的邮箱地址
+        timeout: 300000 // 5分钟超时
+      }
+    }));
+  }
+  else if (data.type === 'auth_error') {
+    console.error('认证失败:', data.message);
+  }
+  else if (data.type === 'code_received') {
     // 收到验证码
     const code = data.payload.code;
     console.log('验证码:', code);
@@ -248,15 +307,17 @@ import websocket
 import time
 import threading
 
+# 认证令牌
+auth_token = "your_websocket_token_here"
+
 # 连接回调
 def on_open(ws):
     print("连接已建立")
-    # 发送等待验证码请求
+    # 发送认证请求
     ws.send(json.dumps({
-        "type": "wait_for_code",
+        "type": "authenticate",
         "payload": {
-            "email": "target@example.com",  # 要监听的邮箱地址
-            "timeout": 300000  # 5分钟超时
+            "token": auth_token
         }
     }))
 
@@ -264,7 +325,19 @@ def on_open(ws):
 def on_message(ws, message):
     data = json.loads(message)
     
-    if data["type"] == "code_received":
+    if data["type"] == "auth_success":
+        print("认证成功")
+        # 发送等待验证码请求
+        ws.send(json.dumps({
+            "type": "wait_for_code",
+            "payload": {
+                "email": "target@example.com",  # 要监听的邮箱地址
+                "timeout": 300000  # 5分钟超时
+            }
+        }))
+    elif data["type"] == "auth_error":
+        print(f"认证失败: {data.get('message')}")
+    elif data["type"] == "code_received":
         # 收到验证码
         code = data["payload"]["code"]
         print(f"验证码: {code}")
@@ -311,13 +384,17 @@ except KeyboardInterrupt:
 #### JavaScript 示例（使用 fetch）：
 
 ```javascript
+// API令牌
+const apiToken = 'your_api_token_here';
+
 // 等待验证码
 async function waitForCode(email) {
   try {
     const response = await fetch('http://your-server:3000/wait-for-code', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiToken}`  // 添加认证头
       },
       body: JSON.stringify({
         email: email,
@@ -358,10 +435,16 @@ waitForCode('target@example.com').then(code => {
 import requests
 import json
 
+# API令牌
+api_token = "your_api_token_here"
+
 def wait_for_code(email, timeout=60000):
     try:
         response = requests.post(
             'http://your-server:3000/wait-for-code',
+            headers={
+                'Authorization': f'Bearer {api_token}'  # 添加认证头
+            },
             json={
                 'email': email,
                 'timeout': timeout
@@ -406,7 +489,15 @@ if code:
 
 ## 客户端示例
 
-项目包含一个简单的 HTML 客户端示例 `client-example.html`，可以直接在浏览器中打开使用。
+项目包含一个简单的 HTML 客户端示例 `client-example.html`，可以直接在浏览器中打开使用。该示例已包含认证功能。
+
+## 安全建议
+
+1. 在生产环境中务必启用认证（AUTH_ENABLED=true）
+2. 使用强密码作为API和WebSocket令牌
+3. 定期更换认证令牌
+4. 使用HTTPS/WSS加密通信
+5. 限制API访问频率，防止暴力破解
 
 ## 注意事项
 
